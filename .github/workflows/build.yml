@@ -1,0 +1,76 @@
+# Build automático do APK + Release no GitHub a cada push.
+#
+# Atenção (lições aprendidas no CAMDA Upload):
+# - O trigger cobre o branch padrão REAL deste repo (claude/flutter-divergence-counter-app-cng9ss),
+#   não apenas main.
+# - O step de Release roda em qualquer push (sem condição restritiva de branch).
+# - A pasta android/ inteira está commitada (não usamos `flutter create` no CI),
+#   então o AndroidManifest.xml já tem android.permission.INTERNET — mas o build
+#   verifica isso mesmo assim.
+# - O APK é assinado com o keystore fixo android/app/camda-release.jks, então
+#   toda atualização instala por cima da anterior sem "App não foi instalado".
+name: Build APK
+
+on:
+  push:
+    branches:
+      - claude/flutter-divergence-counter-app-cng9ss
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Verificar permissão INTERNET no AndroidManifest
+        run: |
+          grep -q "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.ACCESS_NETWORK_STATE" android/app/src/main/AndroidManifest.xml
+          echo "Permissões de rede OK"
+
+      - name: Build APK (release)
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Renomear APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk camda-divergencias-v1.0.${{ github.run_number }}.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camda-divergencias-apk
+          path: camda-divergencias-v1.0.${{ github.run_number }}.apk
+
+      - name: Criar Release com APK
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: CAMDA Divergências v1.0.${{ github.run_number }}
+          body: |
+            APK gerado automaticamente pelo CI.
+
+            **Instalação:** baixe o APK abaixo e instale por cima da versão
+            anterior (assinatura fixa — não precisa desinstalar).
+          files: camda-divergencias-v1.0.${{ github.run_number }}.apk
