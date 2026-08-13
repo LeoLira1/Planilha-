@@ -21,9 +21,17 @@ on:
 permissions:
   contents: write
 
+# Um build por branch: um push novo cancela o anterior — sem isso, um job
+# travado no Gradle segura a fila por horas.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Build normal leva ~5 min; passou de 20, é travamento, não lentidão.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
