@@ -130,9 +130,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
       });
     } on TursoException catch (e) {
+      // Falha de rede: diz por que falhou (URL errada × DNS do aparelho ×
+      // sem internet) em vez de deixar o usuário adivinhando.
+      final detalhe =
+          e.problemaDeRede ? '\n\n${(await service.diagnosticar()).texto}' : '';
       if (!mounted) return;
       setState(() {
-        _erro = e.message;
+        _erro = '${e.message}$detalhe';
         _loading = false;
       });
     } catch (e) {
@@ -270,14 +274,19 @@ class _HomeScreenState extends State<HomeScreen> {
     Widget? action,
   }) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
+        // O diagnóstico de rede é longo: sem rolagem ele estoura a tela.
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 48, color: kMuted),
             const SizedBox(height: 16),
-            Text(text, textAlign: TextAlign.center, style: const TextStyle(color: kText)),
+            SelectableText(
+              text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: kText, height: 1.35),
+            ),
             if (action != null) ...[const SizedBox(height: 20), action],
           ],
         ),

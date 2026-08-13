@@ -30,6 +30,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _urlCtrl = TextEditingController(text: widget.initialUrl);
     _tokenCtrl = TextEditingController(text: widget.initialToken);
+    // Mostra em tempo real o endereço que o app vai realmente chamar — é assim
+    // que se enxerga espaço/caractere invisível colado junto com a URL.
+    _urlCtrl.addListener(() => setState(() {}));
   }
 
   @override
@@ -92,6 +95,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               prefixIcon: Icon(Icons.link),
             ),
           ),
+          if (_urlCtrl.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Vai conectar em: ${TursoService.normalizeUrl(_urlCtrl.text)}/v2/pipeline',
+              style: const TextStyle(color: kMuted, fontSize: 11),
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             controller: _tokenCtrl,
@@ -127,11 +137,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: _testeOk == true ? kGreen : kRed),
               ),
-              child: Text(
+              child: SelectableText(
                 '${_testeOk == true ? '✅' : '❌'} $_testeMsg',
                 style: TextStyle(
                   color: _testeOk == true ? kGreen : kRed,
                   fontSize: 13,
+                  height: 1.35,
                 ),
               ),
             ),
