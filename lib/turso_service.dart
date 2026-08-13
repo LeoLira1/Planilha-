@@ -5,12 +5,18 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'net_diagnostico.dart';
 
 /// Exceção com a mensagem REAL do erro (DNS, HTTP 401, timeout, erro SQL…).
 /// Nunca descartamos a causa — ela sempre chega até a UI.
 class TursoException implements Exception {
   final String message;
-  TursoException(this.message);
+
+  /// true quando a falha foi de rede (DNS, timeout, conexão recusada) e não
+  /// do banco — nesse caso vale rodar o diagnóstico de rede.
+  final bool problemaDeRede;
+
+  TursoException(this.message, {this.problemaDeRede = false});
 
   @override
   String toString() => message;
@@ -34,20 +40,28 @@ class TursoService {
   TursoService({required String url, required this.token})
       : baseUrl = normalizeUrl(url);
 
-  /// Aceita libsql://host, https://host ou host puro.
+  /// Aceita libsql://host, wss://host, https://host ou host puro, e joga fora
+  /// o que o teclado/copiar-colar costuma trazer junto: espaços, caracteres
+  /// invisíveis, caminho (`/v2/pipeline`), query (`?authToken=…`) e `user@`.
+  /// Sobra sempre `https://host[:porta]`.
   static String normalizeUrl(String raw) {
-    var u = raw.trim();
-    if (u.startsWith('libsql://')) {
-      u = 'https://${u.substring('libsql://'.length)}';
-    }
-    if (!u.startsWith('http://') && !u.startsWith('https://')) {
-      u = 'https://$u';
-    }
-    while (u.endsWith('/')) {
-      u = u.substring(0, u.length - 1);
-    }
-    return u;
+    // Remove espaços e invisíveis (zero-width, BOM, NBSP) em qualquer posição:
+    // colados pelo WhatsApp/e-mail eles fazem o DNS falhar sem motivo visível.
+    var u = raw.replaceAll(RegExp(r'[\s\u00A0\u200B-\u200D\uFEFF]'), '');
+    u = u.replaceFirst(RegExp(r'^(libsql|wss|ws|http|https)://', caseSensitive: false), '');
+    // Query/fragmento/caminho não fazem parte do host.
+    u = u.split(RegExp(r'[/?#]')).first;
+    // Credenciais embutidas (user:senha@host).
+    if (u.contains('@')) u = u.substring(u.lastIndexOf('@') + 1);
+    return 'https://${u.toLowerCase()}';
   }
+
+  /// Host puro, para o diagnóstico de rede e para as mensagens de erro.
+  String get host => Uri.parse(baseUrl).host;
+
+  /// Erros de rede pedem uma segunda tentativa antes de acusar o usuário: em
+  /// celular, o primeiro lookup logo após trocar de Wi‑Fi/dados falha sozinho.
+  static const _tentativas = 2;
 
   static Map<String, dynamic> _encodeArg(dynamic v) {
     if (v == null) return {'type': 'null'};
@@ -88,26 +102,7 @@ class TursoService {
       ],
     });
 
-    http.Response resp;
-    try {
-      resp = await http
-          .post(
-            Uri.parse('$baseUrl/v2/pipeline'),
-            headers: {
-              'Authorization': 'Bearer $token',
-              'Content-Type': 'application/json',
-            },
-            body: body,
-          )
-          .timeout(const Duration(seconds: 25));
-    } on SocketException catch (e) {
-      throw TursoException(
-          'Erro de rede/DNS: ${e.message}. Verifique a URL do banco e a sua internet.');
-    } on TimeoutException {
-      throw TursoException('Tempo esgotado (25s) ao conectar em $baseUrl.');
-    } on http.ClientException catch (e) {
-      throw TursoException('Erro de conexão: ${e.message}');
-    }
+    final resp = await _postComRetry(body);
 
     if (resp.statusCode == 401 || resp.statusCode == 403) {
       throw TursoException(
@@ -144,6 +139,50 @@ class TursoService {
     return out;
   }
 
+  /// POST no /v2/pipeline com uma segunda tentativa para falhas de rede.
+  /// Toda exceção vira TursoException com a causa real (nunca `catch (_)`).
+  Future<http.Response> _postComRetry(String body) async {
+    TursoException? ultimoErro;
+    for (var tentativa = 1; tentativa <= _tentativas; tentativa++) {
+      try {
+        return await http
+            .post(
+              Uri.parse('$baseUrl/v2/pipeline'),
+              headers: {
+                'Authorization': 'Bearer $token',
+                'Content-Type': 'application/json',
+              },
+              body: body,
+            )
+            .timeout(const Duration(seconds: 25));
+      } on SocketException catch (e) {
+        final dns = e.message.contains('Failed host lookup');
+        ultimoErro = TursoException(
+          dns
+              ? 'O celular não conseguiu descobrir o endereço de "$host" (DNS).'
+              : 'Erro de rede: ${e.message}',
+          problemaDeRede: true,
+        );
+      } on TimeoutException {
+        ultimoErro = TursoException(
+            'Tempo esgotado (25s) ao conectar em $host.',
+            problemaDeRede: true);
+      } on http.ClientException catch (e) {
+        ultimoErro =
+            TursoException('Erro de conexão: ${e.message}', problemaDeRede: true);
+      } on HandshakeException catch (e) {
+        ultimoErro = TursoException(
+            'Falha no HTTPS/TLS com $host: ${e.message}. Se a rede usa proxy '
+            'ou antivírus com inspeção de tráfego, teste nos dados móveis.',
+            problemaDeRede: true);
+      }
+      if (tentativa < _tentativas) {
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+      }
+    }
+    throw ultimoErro!;
+  }
+
   Future<List<List<dynamic>>> execute(String sql,
       [List<dynamic> args = const []]) async {
     final res = await pipeline([Stmt(sql, args)]);
@@ -161,18 +200,24 @@ class TursoService {
   // ── Operações do app ────────────────────────────────────────────────────
 
   /// Testa a conexão e retorna (ok, mensagem real do resultado/erro).
+  /// Quando a falha é de rede, roda o diagnóstico e diz de quem é a culpa
+  /// (URL errada × DNS do celular × sem internet) e o que fazer.
   Future<(bool, String)> testConnection() async {
     try {
-      final rows =
-          await execute('SELECT COUNT(*) FROM estoque_mestre');
+      final rows = await execute('SELECT COUNT(*) FROM estoque_mestre');
       final n = rows.isNotEmpty ? rows.first.first : 0;
       return (true, 'Conexão OK — $n produtos no estoque mestre.');
     } on TursoException catch (e) {
-      return (false, e.message);
+      if (!e.problemaDeRede) return (false, e.message);
+      final d = await diagnosticarRede(host);
+      return (false, '${e.message}\n\n${d.texto}\n\n${d.detalhes}');
     } catch (e) {
       return (false, 'Erro inesperado: $e');
     }
   }
+
+  /// Diagnóstico avulso, sem depender de uma falha anterior.
+  Future<DiagnosticoRede> diagnosticar() => diagnosticarRede(host);
 
   Future<List<Produto>> fetchProdutos() async {
     final rows = await execute(
