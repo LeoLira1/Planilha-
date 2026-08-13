@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - claude/flutter-divergence-counter-app-cng9ss
+      - claude/smart-filter-active-divergences-5naivb
       - main
       - master
   workflow_dispatch:
