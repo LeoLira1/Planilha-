@@ -21,8 +21,9 @@ via banco **Turso** — é a versão mobile do expander
 
 ## Como o "Recarregar" fica rápido
 
-O `estoque_mestre` (~840 produtos) só muda quando o dashboard reimporta a
-planilha, então rebaixá-lo a cada refresh era desperdício. O app agora:
+O `estoque_mestre` (800 e poucos produtos — o número varia a cada importação)
+só muda quando o dashboard reimporta a planilha, então rebaixá-lo a cada
+refresh era desperdício. O app agora:
 
 1. **Reaproveita a conexão HTTP.** Um único `http.Client` vive junto com o
    serviço, então da segunda consulta em diante não se paga DNS + TCP + TLS de

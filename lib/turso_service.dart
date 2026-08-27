@@ -258,8 +258,8 @@ class TursoService {
       'FROM estoque_mestre';
 
   Future<List<Produto>> fetchProdutos() async {
-    // Sem ORDER BY: ordenar ~840 linhas no aparelho é instantâneo e poupa
-    // trabalho do servidor.
+    // Sem ORDER BY: ordenar as ~800 e poucas linhas no aparelho é
+    // instantâneo e poupa trabalho do servidor.
     final rows = await execute(
         'SELECT codigo, produto, categoria, qtd_sistema FROM estoque_mestre');
     return rows.map(Produto.fromRow).toList()

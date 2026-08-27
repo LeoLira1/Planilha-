@@ -7,10 +7,10 @@ import 'models.dart';
 /// Produtos do `estoque_mestre` guardados no aparelho.
 ///
 /// O catálogo só muda quando o dashboard reimporta a planilha, então rebaixar
-/// as ~840 linhas (~140 KB no formato do libsql) a cada "Recarregar" é
-/// desperdício. Com o cache o app abre com a lista pronta — inclusive offline —
-/// e só busca os produtos de novo quando a assinatura do estoque muda
-/// (ver TursoService.fetchDivergenciasEAssinatura).
+/// as ~800 e poucas linhas (~140 KB no formato do libsql) a cada "Recarregar"
+/// é desperdício. Com o cache o app abre com a lista pronta — inclusive
+/// offline — e só busca os produtos de novo quando a assinatura do estoque
+/// muda (ver TursoService.fetchDivergenciasEAssinatura).
 class ProdutosCache {
   /// A versão está na chave e no conteúdo: se o formato mudar, o cache antigo
   /// é ignorado em vez de ser lido errado.

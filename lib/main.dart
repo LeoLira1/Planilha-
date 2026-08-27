@@ -145,8 +145,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Recarrega em duas etapas em vez de baixar tudo:
   ///   1. um único request traz as divergências (payload pequeno) e a
   ///      assinatura do estoque — a aba Ativas já atualiza aqui;
-  ///   2. os ~840 produtos só descem se a assinatura mudou, se ainda não
-  ///      temos nada, ou se o cache passou de [_validadeCache].
+  ///   2. os ~800 e poucos produtos só descem se a assinatura mudou, se
+  ///      ainda não temos nada, ou se o cache passou de [_validadeCache].
   /// No caso comum (estoque em dia) o refresh inteiro é um request de alguns
   /// bytes, numa conexão que já está aberta.
   Future<void> _carregar({bool manual = false}) async {
