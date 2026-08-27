@@ -269,6 +269,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _produtos = null;
       _assinaturaProdutos = '';
       _produtosSalvoEm = null;
+      // Um refresh do banco antigo pode estar no ar; o serviço dele já foi
+      // fechado, então o resultado é lixo. Zerar aqui evita que a guarda de
+      // _loading engula a recarga do banco novo.
+      _loading = false;
     });
     await _carregar();
   }
