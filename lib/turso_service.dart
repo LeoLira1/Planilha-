@@ -40,6 +40,25 @@ class TursoService {
   TursoService({required String url, required this.token})
       : baseUrl = normalizeUrl(url);
 
+  /// UM cliente para toda a vida do serviço. As funções de topo do
+  /// package:http (http.post) criam e fecham um cliente por chamada, ou seja
+  /// pagam DNS + TCP + TLS do zero em TODA consulta — era esse, e não o
+  /// tamanho dos dados, o custo dominante do "Recarregar". Com keep-alive a
+  /// segunda consulta em diante reaproveita a conexão já aberta.
+  http.Client _client = http.Client();
+
+  /// Ao trocar de Wi-Fi para dados móveis (ou vice-versa) as conexões do pool
+  /// morrem e reutilizá-las falha na hora. Antes de repetir a tentativa
+  /// começamos do zero — é o mesmo motivo pelo qual o retry existe.
+  void _renovarCliente() {
+    _client.close();
+    _client = http.Client();
+  }
+
+  /// Fecha as conexões abertas. Chamar ao descartar o serviço (troca de banco
+  /// nas configurações, fim da tela).
+  void dispose() => _client.close();
+
   /// Aceita libsql://host, wss://host, https://host ou host puro, e joga fora
   /// o que o teclado/copiar-colar costuma trazer junto: espaços, caracteres
   /// invisíveis, caminho (`/v2/pipeline`), query (`?authToken=…`) e `user@`.
@@ -145,7 +164,7 @@ class TursoService {
     TursoException? ultimoErro;
     for (var tentativa = 1; tentativa <= _tentativas; tentativa++) {
       try {
-        return await http
+        return await _client
             .post(
               Uri.parse('$baseUrl/v2/pipeline'),
               headers: {
@@ -177,6 +196,7 @@ class TursoService {
             problemaDeRede: true);
       }
       if (tentativa < _tentativas) {
+        _renovarCliente();
         await Future<void>.delayed(const Duration(milliseconds: 800));
       }
     }
@@ -219,21 +239,61 @@ class TursoService {
   /// Diagnóstico avulso, sem depender de uma falha anterior.
   Future<DiagnosticoRede> diagnosticar() => diagnosticarRede(host);
 
+  static const _sqlDivergencias =
+      'SELECT id, codigo, produto, categoria, delta, status, cooperado, criado_em '
+      'FROM divergencias';
+
+  /// Assinatura do estoque: UMA linha que muda sempre que um produto entra,
+  /// sai, ou tem quantidade, nome ou categoria alterados — exatamente os
+  /// quatro campos que o app usa. Custa alguns bytes contra os ~140 KB da
+  /// tabela inteira, então dá para conferir em todo refresh e só baixar os
+  /// produtos quando algo realmente mudou.
+  ///
+  /// As colunas mexidas por resolverDivergencia (status, diferenca,
+  /// qtd_fisica, ultima_contagem) ficam de fora de propósito: resolver uma
+  /// divergência não deve invalidar o cache de produtos.
+  static const _sqlAssinatura =
+      'SELECT COUNT(*), COALESCE(SUM(qtd_sistema), 0), '
+      'COALESCE(SUM(LENGTH(codigo) + LENGTH(produto) + LENGTH(categoria)), 0) '
+      'FROM estoque_mestre';
+
   Future<List<Produto>> fetchProdutos() async {
+    // Sem ORDER BY: ordenar as ~800 e poucas linhas no aparelho é
+    // instantâneo e poupa trabalho do servidor.
     final rows = await execute(
-        'SELECT codigo, produto, categoria, qtd_sistema FROM estoque_mestre ORDER BY produto');
-    return rows.map(Produto.fromRow).toList();
+        'SELECT codigo, produto, categoria, qtd_sistema FROM estoque_mestre');
+    return rows.map(Produto.fromRow).toList()
+      ..sort((a, b) => a.produto.compareTo(b.produto));
   }
 
   /// Divergências ativas (mesma tabela que alimenta a aba Divergências do dashboard).
   Future<List<Divergencia>> fetchDivergencias({String? codigo}) async {
     final where = codigo == null ? '' : ' WHERE codigo = ?';
     final rows = await execute(
-      'SELECT id, codigo, produto, categoria, delta, status, cooperado, criado_em '
-      'FROM divergencias$where ORDER BY criado_em DESC',
+      '$_sqlDivergencias$where ORDER BY criado_em DESC',
       codigo == null ? const [] : [codigo],
     );
     return rows.map(Divergencia.fromRow).toList();
+  }
+
+  /// O caminho do "Recarregar": divergências + assinatura do estoque num
+  /// ÚNICO request (o pipeline roda os dois statements na mesma conexão).
+  /// Os produtos só são baixados depois, e só se a assinatura tiver mudado.
+  Future<({List<Divergencia> divergencias, String assinatura})>
+      fetchDivergenciasEAssinatura() async {
+    final res = await pipeline([
+      const Stmt('$_sqlDivergencias ORDER BY criado_em DESC'),
+      const Stmt(_sqlAssinatura),
+    ]);
+    final divs = res.isNotEmpty
+        ? res[0].map(Divergencia.fromRow).toList()
+        : <Divergencia>[];
+    final linha =
+        (res.length > 1 && res[1].isNotEmpty) ? res[1].first : <dynamic>[];
+    return (
+      divergencias: divs,
+      assinatura: linha.map((c) => '${c ?? 0}').join('|'),
+    );
   }
 
   /// Mesma lógica de registrar_divergencia_manual() do dashboard:
@@ -268,18 +328,23 @@ class TursoService {
   /// Mesma lógica de resolver_divergencia() do dashboard: apaga o registro e,
   /// se não restar nenhuma divergência do produto, reseta o estoque_mestre
   /// para status 'ok'.
+  ///
+  /// Tudo num único request transacionado: antes eram três idas ao servidor
+  /// (DELETE, COUNT, UPDATE), cada uma abrindo conexão própria, com uma
+  /// corrida entre a contagem e o update. O NOT EXISTS faz o papel do COUNT já
+  /// dentro da transação, depois do DELETE.
   Future<void> resolverDivergencia(Divergencia d) async {
-    await execute('DELETE FROM divergencias WHERE id = ?', [d.id]);
-    final rows = await execute(
-        'SELECT COUNT(*) FROM divergencias WHERE codigo = ?', [d.codigo]);
-    final remaining =
-        rows.isNotEmpty ? int.tryParse('${rows.first.first}') ?? 0 : 0;
-    if (remaining == 0) {
-      await execute(
-        "UPDATE estoque_mestre SET status = 'ok', diferenca = 0, qtd_fisica = qtd_sistema, "
-        "ultima_contagem = ? WHERE codigo = ? AND status IN ('falta', 'sobra')",
-        [agoraBrt(), d.codigo],
-      );
-    }
+    await pipeline([
+      const Stmt('BEGIN'),
+      Stmt('DELETE FROM divergencias WHERE id = ?', [d.id]),
+      Stmt(
+        "UPDATE estoque_mestre SET status = 'ok', diferenca = 0, "
+        "qtd_fisica = qtd_sistema, ultima_contagem = ? "
+        "WHERE codigo = ? AND status IN ('falta', 'sobra') "
+        "AND NOT EXISTS (SELECT 1 FROM divergencias WHERE codigo = ?)",
+        [agoraBrt(), d.codigo, d.codigo],
+      ),
+      const Stmt('COMMIT'),
+    ]);
   }
 }

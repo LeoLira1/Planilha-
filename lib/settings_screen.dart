@@ -51,7 +51,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final service =
         TursoService(url: _urlCtrl.text, token: _tokenCtrl.text.trim());
     // testConnection devolve a mensagem REAL do erro (DNS, 401, timeout, SQL…)
+    // e nunca lança — por isso dá para fechar o serviço logo em seguida.
     final (ok, msg) = await service.testConnection();
+    // Serviço descartável: sem isso a conexão do teste fica pendurada.
+    service.dispose();
     if (!mounted) return;
     setState(() {
       _testando = false;
