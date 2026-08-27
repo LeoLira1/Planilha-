@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'divergencias_tab.dart';
 import 'models.dart';
+import 'produtos_cache.dart';
 import 'registrar_tab.dart';
 import 'settings_screen.dart';
 import 'turso_service.dart';
@@ -88,10 +90,27 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = false;
   String? _erro;
 
+  /// Assinatura do estoque correspondente aos produtos que estão em memória.
+  String _assinaturaProdutos = '';
+  DateTime? _produtosSalvoEm;
+  DateTime? _atualizadoEm;
+
+  /// Validade máxima do cache de produtos. A assinatura já pega qualquer
+  /// mudança real; isso é só rede de segurança para o caso raro de uma
+  /// alteração que não mexa nem na contagem nem nas somas (trocar as
+  /// quantidades de dois produtos entre si, por exemplo).
+  static const _validadeCache = Duration(hours: 24);
+
   @override
   void initState() {
     super.initState();
     _init();
+  }
+
+  @override
+  void dispose() {
+    _service?.dispose();
+    super.dispose();
   }
 
   Future<void> _init() async {
@@ -100,6 +119,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final token = prefs.getString('turso_token') ?? '';
     _senhaSalva = prefs.getString('senha_edicao') ?? '';
     _senhaOk = _senhaSalva == kSenhaEdicao;
+    // Cache antes da rede: a lista de produtos aparece na hora, mesmo offline.
+    await _lerCache();
     if (url.isEmpty || token.isEmpty) {
       if (mounted) {
         setState(() {});
@@ -111,42 +132,105 @@ class _HomeScreenState extends State<HomeScreen> {
     await _carregar();
   }
 
-  Future<void> _carregar() async {
+  Future<void> _lerCache() async {
+    final cache = await ProdutosCache.ler();
+    if (cache == null || !mounted) return;
+    setState(() {
+      _produtos = cache.produtos;
+      _assinaturaProdutos = cache.assinatura;
+      _produtosSalvoEm = cache.salvoEm;
+    });
+  }
+
+  /// Recarrega em duas etapas em vez de baixar tudo:
+  ///   1. um único request traz as divergências (payload pequeno) e a
+  ///      assinatura do estoque — a aba Ativas já atualiza aqui;
+  ///   2. os ~840 produtos só descem se a assinatura mudou, se ainda não
+  ///      temos nada, ou se o cache passou de [_validadeCache].
+  /// No caso comum (estoque em dia) o refresh inteiro é um request de alguns
+  /// bytes, numa conexão que já está aberta.
+  Future<void> _carregar({bool manual = false}) async {
     final service = _service;
-    if (service == null) return;
+    // O botão já fica desabilitado durante o load, mas o pull-to-refresh não:
+    // sem esta guarda, puxar a lista várias vezes empilha recargas.
+    if (service == null || _loading) return;
     setState(() {
       _loading = true;
       _erro = null;
     });
+    final cronometro = Stopwatch()..start();
     try {
-      final results = await Future.wait([
-        service.fetchProdutos(),
-        service.fetchDivergencias(),
-      ]);
+      final r = await service.fetchDivergenciasEAssinatura();
+      if (!mounted) return;
+      setState(() => _divergencias = r.divergencias);
+
+      final cacheVencido = _produtosSalvoEm == null ||
+          DateTime.now().difference(_produtosSalvoEm!) > _validadeCache;
+      final baixarProdutos = _produtos == null ||
+          cacheVencido ||
+          r.assinatura != _assinaturaProdutos;
+
+      if (baixarProdutos) {
+        final produtos = await service.fetchProdutos();
+        await ProdutosCache.gravar(produtos, r.assinatura);
+        if (!mounted) return;
+        setState(() {
+          _produtos = produtos;
+          _assinaturaProdutos = r.assinatura;
+          _produtosSalvoEm = DateTime.now();
+        });
+      }
       if (!mounted) return;
       setState(() {
-        _produtos = results[0] as List<Produto>;
-        _divergencias = results[1] as List<Divergencia>;
         _loading = false;
+        _atualizadoEm = DateTime.now();
       });
+      if (kDebugMode) {
+        debugPrint('[carregar] ${cronometro.elapsedMilliseconds} ms — produtos '
+            '${baixarProdutos ? 'baixados' : 'do cache'}');
+      }
+      if (manual) {
+        _avisar(baixarProdutos
+            ? '✅ Atualizado — ${_produtos?.length ?? 0} produtos'
+            : '✅ Atualizado — estoque já estava em dia');
+      }
     } on TursoException catch (e) {
       // Falha de rede: diz por que falhou (URL errada × DNS do aparelho ×
-      // sem internet) em vez de deixar o usuário adivinhando.
-      final detalhe =
-          e.problemaDeRede ? '\n\n${(await service.diagnosticar()).texto}' : '';
+      // sem internet) em vez de deixar o usuário adivinhando. O diagnóstico
+      // leva alguns segundos, então só roda quando o erro vai mesmo tomar a
+      // tela — com produtos em cache ele viraria só espera inútil.
+      final semDados = _produtos == null;
+      final detalhe = (semDados && e.problemaDeRede)
+          ? '\n\n${(await service.diagnosticar()).texto}'
+          : '';
       if (!mounted) return;
       setState(() {
         _erro = '${e.message}$detalhe';
         _loading = false;
       });
+      // Com dados em cache a tela continua utilizável: o erro vira aviso.
+      if (!semDados) _avisar('❌ ${e.message}');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _erro = 'Erro inesperado: $e';
         _loading = false;
       });
+      if (_produtos != null) _avisar('❌ Erro inesperado: $e');
     }
   }
+
+  void _avisar(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+      );
+  }
+
+  static String _hhmm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   Future<void> _recarregarDivergencias() async {
     final service = _service;
@@ -176,7 +260,16 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result == null) return;
     await prefs.setString('turso_url', result['url']!);
     await prefs.setString('turso_token', result['token']!);
+    _service?.dispose();
     _service = TursoService(url: result['url']!, token: result['token']!);
+    // Outro banco, outro estoque_mestre: o cache guardado não vale mais.
+    await ProdutosCache.limpar();
+    if (!mounted) return;
+    setState(() {
+      _produtos = null;
+      _assinaturaProdutos = '';
+      _produtosSalvoEm = null;
+    });
     await _carregar();
   }
 
@@ -200,9 +293,20 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           actions: [
             IconButton(
-              tooltip: 'Recarregar',
-              icon: const Icon(Icons.refresh),
-              onPressed: _loading ? null : _carregar,
+              tooltip: _atualizadoEm == null
+                  ? 'Recarregar'
+                  : 'Recarregar (última: ${_hhmm(_atualizadoEm!)})',
+              // Enquanto atualiza, o próprio botão vira o indicador: os dados
+              // em cache continuam na tela em vez de sumirem num spinner.
+              icon: _loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: kAmber),
+                    )
+                  : const Icon(Icons.refresh),
+              onPressed: _loading ? null : () => _carregar(manual: true),
             ),
             IconButton(
               tooltip: 'Configurações',
@@ -243,7 +347,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return _centerMessage(
         icon: Icons.cloud_off,
         text: _erro!,
-        action: FilledButton(onPressed: _carregar, child: const Text('Tentar novamente')),
+        action: FilledButton(
+            onPressed: () => _carregar(manual: true),
+            child: const Text('Tentar novamente')),
       );
     }
     return TabBarView(
@@ -262,7 +368,7 @@ class _HomeScreenState extends State<HomeScreen> {
           divergencias: _divergencias ?? const [],
           senhaOk: _senhaOk,
           onChanged: _recarregarDivergencias,
-          onRefresh: _carregar,
+          onRefresh: () => _carregar(manual: true),
         ),
       ],
     );

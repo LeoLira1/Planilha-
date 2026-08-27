@@ -19,6 +19,31 @@ via banco **Turso** — é a versão mobile do expander
 - As divergências aparecem no dashboard no próximo sync/refresh dele (o cache
   do dashboard é de 60 s).
 
+## Como o "Recarregar" fica rápido
+
+O `estoque_mestre` (~840 produtos) só muda quando o dashboard reimporta a
+planilha, então rebaixá-lo a cada refresh era desperdício. O app agora:
+
+1. **Reaproveita a conexão HTTP.** Um único `http.Client` vive junto com o
+   serviço, então da segunda consulta em diante não se paga DNS + TCP + TLS de
+   novo. Era esse o custo dominante do refresh — não o tamanho dos dados.
+2. **Guarda os produtos no aparelho** (`lib/produtos_cache.dart`, em
+   `shared_preferences`, ~54 KB). O app abre com a lista já na tela, inclusive
+   offline, em vez de um spinner esperando a rede.
+3. **Confere antes de baixar.** Todo refresh faz **um** request que traz as
+   divergências e uma *assinatura* do estoque (`COUNT` + somas de quantidade e
+   de tamanho de texto). Se a assinatura não mudou, os produtos nem são
+   pedidos. Por segurança, o download completo acontece de qualquer forma se o
+   cache passar de 24 h ou se o banco for trocado nas configurações.
+
+Resultado: no caso comum o "Recarregar" é um request de algumas centenas de
+bytes numa conexão já aberta, em vez de duas conexões novas e ~140 KB. O botão
+vira um indicador enquanto atualiza — os dados em cache continuam visíveis — e
+um aviso curto diz se os produtos foram rebaixados ou já estavam em dia.
+
+Resolver uma divergência também virou **um** request transacionado (antes eram
+três seguidos: DELETE, COUNT e UPDATE).
+
 ## Configuração (primeira vez)
 
 1. Abra o app → ele leva direto para **Configurações**.
@@ -70,6 +95,7 @@ chamado.
 ```
 lib/
   main.dart              # app, tema escuro (paleta do dashboard) e abas
+  produtos_cache.dart    # produtos guardados no aparelho (abertura instantânea)
   registrar_tab.dart     # formulário: senha, produto, delta, cooperado
   divergencias_tab.dart  # lista de divergências ativas + resolver
   settings_screen.dart   # URL/token do Turso + teste de conexão
