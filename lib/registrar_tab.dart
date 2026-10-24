@@ -6,15 +6,15 @@ import 'models.dart';
 import 'turso_service.dart';
 
 /// Réplica do expander "⚠️ Registrar divergência de contagem" do dashboard
-/// (seção Repor Loja): senha de edição, produto, diferença (+sobrando /
+/// (seção Repor Loja): produto, diferença (+sobrando /
 /// −faltando) e nome do cooperado. O valor do sistema NÃO é alterado.
+/// A senha de edição fica em Configurações, fora do caminho do lançamento.
 class RegistrarTab extends StatefulWidget {
   final TursoService service;
   final List<Produto> produtos;
   final List<Divergencia> divergencias;
-  final String senhaInicial;
   final bool senhaOk;
-  final ValueChanged<String> onSenhaChanged;
+  final VoidCallback onAbrirConfiguracoes;
   final Future<void> Function() onRegistrado;
 
   const RegistrarTab({
@@ -22,9 +22,8 @@ class RegistrarTab extends StatefulWidget {
     required this.service,
     required this.produtos,
     required this.divergencias,
-    required this.senhaInicial,
     required this.senhaOk,
-    required this.onSenhaChanged,
+    required this.onAbrirConfiguracoes,
     required this.onRegistrado,
   });
 
@@ -34,13 +33,11 @@ class RegistrarTab extends StatefulWidget {
 
 class _RegistrarTabState extends State<RegistrarTab>
     with AutomaticKeepAliveClientMixin {
-  late final TextEditingController _senhaCtrl;
   final _buscaCtrl = TextEditingController();
   final _buscaFocus = FocusNode();
   final _deltaCtrl = TextEditingController(text: '0');
   final _coopCtrl = TextEditingController();
 
-  bool _mostrarSenha = false;
   Produto? _selecionado;
   bool _salvando = false;
 
@@ -48,14 +45,7 @@ class _RegistrarTabState extends State<RegistrarTab>
   bool get wantKeepAlive => true;
 
   @override
-  void initState() {
-    super.initState();
-    _senhaCtrl = TextEditingController(text: widget.senhaInicial);
-  }
-
-  @override
   void dispose() {
-    _senhaCtrl.dispose();
     _buscaCtrl.dispose();
     _buscaFocus.dispose();
     _deltaCtrl.dispose();
@@ -116,30 +106,29 @@ class _RegistrarTabState extends State<RegistrarTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final senhaDigitada = _senhaCtrl.text;
-    final senhaErrada = senhaDigitada.isNotEmpty && !widget.senhaOk;
-
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        TextField(
-          controller: _senhaCtrl,
-          obscureText: !_mostrarSenha,
-          autocorrect: false,
-          enableSuggestions: false,
-          onChanged: widget.onSenhaChanged,
-          decoration: InputDecoration(
-            labelText: '🔑 Senha para edição',
-            hintText: 'Digite a senha…',
-            errorText: senhaErrada ? 'Senha incorreta.' : null,
-            suffixIcon: IconButton(
-              icon: Icon(_mostrarSenha ? Icons.visibility_off : Icons.visibility),
-              onPressed: () => setState(() => _mostrarSenha = !_mostrarSenha),
+        if (!widget.senhaOk) ...[
+          const SizedBox(height: 24),
+          const Icon(Icons.lock_outline, size: 40, color: kMuted),
+          const SizedBox(height: 12),
+          const Text(
+            'Para registrar divergências, informe a senha de edição em '
+            'Configurações. Ela fica salva — só precisa fazer isso uma vez.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: kMuted, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: FilledButton.icon(
+              onPressed: widget.onAbrirConfiguracoes,
+              icon: const Icon(Icons.settings_outlined),
+              label: const Text('Abrir configurações'),
             ),
           ),
-        ),
+        ],
         if (widget.senhaOk) ...[
-          const SizedBox(height: 12),
           const Text(
             'Selecione o produto e informe quantos estão sobrando (+) ou '
             'faltando (−) em relação ao que o sistema mostra. O valor do '

@@ -254,10 +254,24 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => SettingsScreen(
           initialUrl: prefs.getString('turso_url') ?? '',
           initialToken: prefs.getString('turso_token') ?? '',
+          initialSenha: _senhaSalva,
         ),
       ),
     );
     if (result == null) return;
+    final senha = result['senha'] ?? '';
+    await prefs.setString('senha_edicao', senha);
+    if (!mounted) return;
+    setState(() {
+      _senhaSalva = senha;
+      _senhaOk = senha == kSenhaEdicao;
+    });
+    // Só a senha mudou: não há por que derrubar o cache e recarregar o banco.
+    if (result['url'] == prefs.getString('turso_url') &&
+        result['token'] == prefs.getString('turso_token') &&
+        _service != null) {
+      return;
+    }
     await prefs.setString('turso_url', result['url']!);
     await prefs.setString('turso_token', result['token']!);
     _service?.dispose();
@@ -275,15 +289,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _loading = false;
     });
     await _carregar();
-  }
-
-  Future<void> _onSenhaChanged(String senha) async {
-    final ok = senha == kSenhaEdicao;
-    if (ok != _senhaOk) setState(() => _senhaOk = ok);
-    if (ok) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('senha_edicao', senha);
-    }
   }
 
   @override
@@ -362,9 +367,8 @@ class _HomeScreenState extends State<HomeScreen> {
           service: _service!,
           produtos: _produtos ?? const [],
           divergencias: _divergencias ?? const [],
-          senhaInicial: _senhaSalva,
           senhaOk: _senhaOk,
-          onSenhaChanged: _onSenhaChanged,
+          onAbrirConfiguracoes: _abrirConfiguracoes,
           onRegistrado: _recarregarDivergencias,
         ),
         DivergenciasTab(
