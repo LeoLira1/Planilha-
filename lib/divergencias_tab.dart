@@ -208,7 +208,7 @@ class _DivergenciasTabState extends State<DivergenciasTab>
   Future<void> _resolver(BuildContext context, Divergencia d) async {
     if (!widget.senhaOk) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('🔑 Digite a senha de edição na aba Registrar para resolver.'),
+        content: Text('🔑 Digite a senha de edição em Configurações (⚙️) para resolver.'),
       ));
       return;
     }

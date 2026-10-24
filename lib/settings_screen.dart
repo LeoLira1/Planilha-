@@ -6,11 +6,13 @@ import 'turso_service.dart';
 class SettingsScreen extends StatefulWidget {
   final String initialUrl;
   final String initialToken;
+  final String initialSenha;
 
   const SettingsScreen({
     super.key,
     required this.initialUrl,
     required this.initialToken,
+    required this.initialSenha,
   });
 
   @override
@@ -20,7 +22,9 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _urlCtrl;
   late final TextEditingController _tokenCtrl;
+  late final TextEditingController _senhaCtrl;
   bool _mostrarToken = false;
+  bool _mostrarSenha = false;
   bool _testando = false;
   bool? _testeOk;
   String? _testeMsg;
@@ -30,6 +34,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _urlCtrl = TextEditingController(text: widget.initialUrl);
     _tokenCtrl = TextEditingController(text: widget.initialToken);
+    _senhaCtrl = TextEditingController(text: widget.initialSenha);
+    _senhaCtrl.addListener(() => setState(() {}));
     // Mostra em tempo real o endereço que o app vai realmente chamar — é assim
     // que se enxerga espaço/caractere invisível colado junto com a URL.
     _urlCtrl.addListener(() => setState(() {}));
@@ -39,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlCtrl.dispose();
     _tokenCtrl.dispose();
+    _senhaCtrl.dispose();
     super.dispose();
   }
 
@@ -72,13 +79,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       return;
     }
-    Navigator.of(context).pop({'url': url, 'token': token});
+    Navigator.of(context)
+        .pop({'url': url, 'token': token, 'senha': _senhaCtrl.text});
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Configurações do banco')),
+      appBar: AppBar(title: const Text('Configurações')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -150,6 +158,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
+          const SizedBox(height: 28),
+          const Text('Edição',
+              style: TextStyle(color: kText, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text(
+            'Senha para registrar e resolver divergências. Fica salva no '
+            'aparelho — só precisa digitar uma vez.',
+            style: TextStyle(color: kMuted, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _senhaCtrl,
+            obscureText: !_mostrarSenha,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              labelText: '🔑 Senha para edição',
+              hintText: 'Digite a senha…',
+              errorText: _senhaCtrl.text.isNotEmpty &&
+                      _senhaCtrl.text != kSenhaEdicao
+                  ? 'Senha incorreta.'
+                  : null,
+              helperText: _senhaCtrl.text == kSenhaEdicao
+                  ? '✅ Senha correta — edição liberada.'
+                  : null,
+              suffixIcon: IconButton(
+                icon: Icon(_mostrarSenha ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => _mostrarSenha = !_mostrarSenha),
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: _salvar,
